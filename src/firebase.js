@@ -1,7 +1,4 @@
 // src/firebase.js
-import { initializeApp } from 'firebase/app';
-import { getDatabase } from 'firebase/database';
-
 const firebaseConfig = {
   apiKey: "AIza...", // Use your actual key here
   authDomain: "lifesync05.firebaseapp.com",
@@ -12,9 +9,3 @@ const firebaseConfig = {
   messagingSenderId: "...",
   appId: "..."
 };
-
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
-
-// Get a reference to the database service
-export const db = getDatabase(app);

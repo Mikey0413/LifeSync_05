@@ -7,7 +7,8 @@
 }
 
 button, a, [role="button"], .cursor-pointer {
-  cursor: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="6" fill="%23dc2626"/><circle cx="16" cy="16" r="8" fill="none" stroke="%23dc2626" stroke-width="1.5"/></circle></svg>') 16 16, pointer;
+  /* Fixed: Removed the extra </circle> tag */
+  cursor: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="6" fill="%23dc2626"/><circle cx="16" cy="16" r="8" fill="none" stroke="%23dc2626" stroke-width="1.5"/></svg>') 16 16, pointer;
 }
 
 input, textarea, select {
