@@ -1,12 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { User, Hospital, LogOut, MapPin, Phone, Shield, Menu, X, Ambulance, ChevronRight, Bed, Phone as PhoneIcon } from 'lucide-react';
+import { User, Hospital, LogOut, MapPin, Home, Phone, Shield, Menu, X, Ambulance, ChevronRight, Bed, Phone as PhoneIcon } from 'lucide-react';
+import { ref, push, set, serverTimestamp } from 'firebase/database';
+import { db } from './firebase';
 
 export default function LifeSyncApp() {
   // 1. STATE MANAGEMENT (Persistence Simulation)
   const [userRole, setUserRole] = useState(localStorage.getItem('role') || null);
   const [isUserRegistered, setIsUserRegistered] = useState(localStorage.getItem('isRegistered') === 'true');
-  const [currentPage, setCurrentPage] = useState('home');
+  const [currentPage, setCurrentPage] = useState(() => {
+    // If user is already registered and logged in, go to home page
+    if (localStorage.getItem('role') === 'user' && localStorage.getItem('isRegistered') === 'true') {
+      return 'home';
+    }
+    return 'home';
+  });
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [sosStarted, setSosStarted] = useState(false);
   const [position, setPosition] = useState(null);
@@ -14,6 +22,10 @@ export default function LifeSyncApp() {
   const [notificationStatus, setNotificationStatus] = useState({});
   const [userData, setUserData] = useState(() => {
     const stored = localStorage.getItem('userData');
+    return stored ? JSON.parse(stored) : null;
+  });
+  const [hospitalData, setHospitalData] = useState(() => {
+    const stored = localStorage.getItem('hospitalLoggedIn');
     return stored ? JSON.parse(stored) : null;
   });
 
@@ -68,6 +80,7 @@ export default function LifeSyncApp() {
   const [mapRef, setMapRef] = useState(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [alertsSent, setAlertsSent] = useState(false);
+  const [isSOSActive, setIsSOSActive] = useState(false);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
 
   // Search for REAL nearby hospitals using Google Places API
@@ -415,6 +428,67 @@ export default function LifeSyncApp() {
     callAmbulance(hospital);
   };
 
+  // Firebase Emergency Report Function
+  const reportEmergency = (coords) => {
+    try {
+      // Reference the 'emergencies' collection
+      const alertsRef = ref(db, 'emergencies');
+      
+      // Create a new unique entry
+      const newAlertRef = push(alertsRef);
+      
+      // Populate the entry with patient and GPS data
+      set(newAlertRef, {
+        userName: userData?.name || 'Unknown Patient',
+        bloodType: userData?.bloodGroup || 'N/A',
+        age: userData?.age || 'N/A',
+        phone: userData?.phone || 'N/A',
+        coordinates: {
+          lat: coords.lat,
+          lng: coords.lng
+        },
+        emergencyContacts: emergencyContacts().slice(0, 2),
+        status: 'pending',
+        createdAt: serverTimestamp()
+      })
+      .then(() => {
+        console.log('✅ Emergency reported to Firebase successfully!');
+        setIsSOSActive(true);
+      })
+      .catch((error) => {
+        console.error('❌ Firebase sync failed:', error);
+        setIsSOSActive(false);
+      });
+    } catch (error) {
+      console.error('Error in reportEmergency:', error);
+      setIsSOSActive(false);
+    }
+  };
+
+  const triggerSOS = () => {
+    setIsSOSActive(true);
+
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const currentCoords = {
+            lat: position.coords.latitude,
+            lng: position.coords.longitude
+          };
+          setPosition(position);
+          
+          // THE TRIGGER: Send to Firebase
+          reportEmergency(currentCoords); 
+        },
+        (error) => {
+          console.error("Geolocation failed:", error);
+          setIsSOSActive(false);
+        },
+        { enableHighAccuracy: true }
+      );
+    }
+  };
+
   const startSOS = async () => {
     if (!('geolocation' in navigator)) {
       alert('Geolocation not supported in this browser');
@@ -484,8 +558,8 @@ export default function LifeSyncApp() {
           <h2 className="text-2xl font-black mb-4">Register Hospital</h2>
           <HospitalRegistrationForm onSubmit={(h) => {
             localStorage.setItem('hospitalData', JSON.stringify(h));
-            alert('Hospital registered. Please login now.');
-            setCurrentPage('hospital-login');
+            setHospitalData(h);
+            setCurrentPage('hospital-dashboard');
           }} onCancel={() => setCurrentPage('hospital-login')} />
         </div>
       </div>
@@ -555,7 +629,7 @@ export default function LifeSyncApp() {
                 <X onClick={() => setIsMenuOpen(false)} />
               </div>
               <nav className="space-y-6">
-                    <div onClick={() => {setCurrentPage('home'); setIsMenuOpen(false)}} className="flex items-center gap-4 text-lg font-bold cursor-pointer hover:text-red-600 transition"><MapPin /> Home</div>
+                    <div onClick={() => {setCurrentPage('home'); setIsMenuOpen(false)}} className="flex items-center gap-4 text-lg font-bold cursor-pointer hover:text-red-600 transition"><Home className="w-4 h-4" /> Home</div>
                     
                 <div onClick={() => {setCurrentPage('profile'); setIsMenuOpen(false)}} className="flex items-center gap-4 text-lg font-bold cursor-pointer hover:text-red-600 transition"><User /> Profile</div>
                     <div onClick={() => {setCurrentPage('nearest'); setIsMenuOpen(false)}} className="flex items-center gap-4 text-lg font-bold cursor-pointer hover:text-red-600 transition"><Hospital /> Nearest Hospitals</div>
@@ -945,7 +1019,14 @@ function RegistrationForm({ onSubmit, onBack }) {
   const [step, setStep] = useState(1);
 
   const handleChange = (e) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
+    const { name, value } = e.target;
+    // For phone fields, only allow digits (0-9)
+    if (name === 'phone' || name === 'emergencyPhone1' || name === 'emergencyPhone2') {
+      const onlyDigits = value.replace(/\D/g, '');
+      setFormData({ ...formData, [name]: onlyDigits });
+    } else {
+      setFormData({ ...formData, [name]: value });
+    }
   };
 
   const handleFile = (e) => {
@@ -963,6 +1044,31 @@ function RegistrationForm({ onSubmit, onBack }) {
       alert('Please fill all required fields');
       return;
     }
+    if (!formData.emergencyContact1 || !formData.emergencyPhone1) {
+      alert('Please enter at least one emergency contact with phone number');
+      return;
+    }
+    // Check if Contact 1 name and phone are the same
+    if (formData.emergencyContact1 === formData.emergencyPhone1) {
+      alert('Emergency contact name and phone number cannot be the same');
+      return;
+    }
+    // Check if Contact 2 is filled and validate it's different from Contact 1
+    if (formData.emergencyContact2 || formData.emergencyPhone2) {
+      if (formData.emergencyContact1 === formData.emergencyContact2) {
+        alert('Emergency contact names must be different');
+        return;
+      }
+      if (formData.emergencyPhone1 === formData.emergencyPhone2) {
+        alert('Emergency contact phone numbers must be different');
+        return;
+      }
+      // Check if Contact 2 name and phone are the same
+      if (formData.emergencyContact2 === formData.emergencyPhone2) {
+        alert('Emergency contact name and phone number cannot be the same');
+        return;
+      }
+    }
     onSubmit(formData);
   };
 
@@ -974,7 +1080,7 @@ function RegistrationForm({ onSubmit, onBack }) {
         </button>
 
         <div className="bg-white rounded-3xl shadow-xl p-8 border border-slate-100">
-          <h1 className="text-3xl font-black text-slate-800 mb-2">Setup Profile</h1>
+          <h1 className="text-3xl font-black text-slate-800 mb-2">Register Urself</h1>
           <p className="text-slate-500 mb-6">Complete your profile for emergency assistance</p>
 
           {/* Progress Bar */}
@@ -1023,13 +1129,26 @@ function RegistrationForm({ onSubmit, onBack }) {
               </div>
               <div>
                 <label className="text-xs font-bold text-slate-500 uppercase">Phone *</label>
-                <input type="tel" name="phone" placeholder="+91 XXXXX XXXXX" value={formData.phone} onChange={handleChange} className="w-full mt-1 p-3 border border-slate-200 rounded-xl focus:outline-none focus:border-red-600" />
+                <div className="flex items-center mt-1 border border-slate-200 rounded-xl focus-within:border-red-600 bg-white">
+                  <span className="px-3 py-3 font-bold text-slate-600">+91</span>
+                  <input type="tel" name="phone" placeholder="XXXXX XXXXX" value={formData.phone} onChange={handleChange} maxLength="10" className="flex-1 p-3 border-none outline-none" />
+                </div>
               </div>
               <div>
                 <label className="text-xs font-bold text-slate-500 uppercase">Email</label>
                 <input type="email" name="email" placeholder="your@email.com" value={formData.email} onChange={handleChange} className="w-full mt-1 p-3 border border-slate-200 rounded-xl focus:outline-none focus:border-red-600" />
               </div>
-              <button onClick={() => setStep(2)} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl mt-6">
+              <button onClick={() => {
+                if (!formData.name || !formData.age || !formData.bloodGroup || !formData.phone) {
+                  alert('Please fill all required fields: Name, Age, Blood Group, and Phone');
+                  return;
+                }
+                if (formData.phone.length < 10) {
+                  alert('Phone number must be 10 digits');
+                  return;
+                }
+                setStep(2);
+              }} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl mt-6">
                 Next
               </button>
             </div>
@@ -1044,7 +1163,10 @@ function RegistrationForm({ onSubmit, onBack }) {
               </div>
               <div>
                 <label className="text-xs font-bold text-slate-500 uppercase">Contact 1 Phone *</label>
-                <input type="tel" name="emergencyPhone1" placeholder="+91 XXXXX XXXXX" value={formData.emergencyPhone1} onChange={handleChange} className="w-full mt-1 p-3 border border-slate-200 rounded-xl focus:outline-none focus:border-red-600" />
+                <div className="flex items-center mt-1 border border-slate-200 rounded-xl focus-within:border-red-600 bg-white">
+                  <span className="px-3 py-3 font-bold text-slate-600">+91</span>
+                  <input type="tel" name="emergencyPhone1" placeholder="XXXXX XXXXX" value={formData.emergencyPhone1} onChange={handleChange} maxLength="10" className="flex-1 p-3 border-none outline-none" />
+                </div>
               </div>
               <div>
                 <label className="text-xs font-bold text-slate-500 uppercase">Contact 2 Name</label>
@@ -1052,7 +1174,10 @@ function RegistrationForm({ onSubmit, onBack }) {
               </div>
               <div>
                 <label className="text-xs font-bold text-slate-500 uppercase">Contact 2 Phone</label>
-                <input type="tel" name="emergencyPhone2" placeholder="+91 XXXXX XXXXX" value={formData.emergencyPhone2} onChange={handleChange} className="w-full mt-1 p-3 border border-slate-200 rounded-xl focus:outline-none focus:border-red-600" />
+                <div className="flex items-center mt-1 border border-slate-200 rounded-xl focus-within:border-red-600 bg-white">
+                  <span className="px-3 py-3 font-bold text-slate-600">+91</span>
+                  <input type="tel" name="emergencyPhone2" placeholder="XXXXX XXXXX" value={formData.emergencyPhone2} onChange={handleChange} maxLength="10" className="flex-1 p-3 border-none outline-none" />
+                </div>
               </div>
               <div className="flex gap-3 mt-6">
                 <button onClick={() => setStep(1)} className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold py-3 rounded-xl">
@@ -1073,14 +1198,23 @@ function RegistrationForm({ onSubmit, onBack }) {
 // --- HOSPITAL REGISTRATION FORM ---
 function HospitalRegistrationForm({ onSubmit, onCancel }) {
   const [data, setData] = useState({
-    hospitalName: '', receptionistName: '', contact: '', email: '', password: '', specialties: '', ambulanceDriver: ''
+    hospitalId: '', hospitalName: '', contact: '', email: '', password: '', specialties: ''
   });
 
-  const handleChange = (e) => setData({ ...data, [e.target.name]: e.target.value });
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    // For contact, only allow digits (0-9)
+    if (name === 'contact') {
+      const onlyDigits = value.replace(/\D/g, '');
+      setData({ ...data, [name]: onlyDigits });
+    } else {
+      setData({ ...data, [name]: value });
+    }
+  };
 
   const handleSubmit = () => {
-    if (!data.hospitalName || !data.email || !data.password) {
-      alert('Please fill hospital name, email and password');
+    if (!data.hospitalId || !data.hospitalName || !data.email || !data.password) {
+      alert('Please fill Hospital ID, hospital name, email and password');
       return;
     }
     onSubmit(data);
@@ -1089,13 +1223,12 @@ function HospitalRegistrationForm({ onSubmit, onCancel }) {
   return (
     <div>
       <div className="space-y-3">
+        <input name="hospitalId" value={data.hospitalId} onChange={handleChange} placeholder="Hospital ID" className="w-full p-3 border rounded-lg" />
         <input name="hospitalName" value={data.hospitalName} onChange={handleChange} placeholder="Hospital Name" className="w-full p-3 border rounded-lg" />
-        <input name="receptionistName" value={data.receptionistName} onChange={handleChange} placeholder="Receptionist Name" className="w-full p-3 border rounded-lg" />
-        <input name="contact" value={data.contact} onChange={handleChange} placeholder="Contact Number" className="w-full p-3 border rounded-lg" />
-        <input name="email" value={data.email} onChange={handleChange} placeholder="Email" className="w-full p-3 border rounded-lg" />
+        <input name="contact" value={data.contact} onChange={handleChange} placeholder="Hospital Contact Number" maxLength="10" className="w-full p-3 border rounded-lg" />
+        <input name="email" value={data.email} onChange={handleChange} placeholder="Hospital Email" className="w-full p-3 border rounded-lg" />
         <input name="password" type="password" value={data.password} onChange={handleChange} placeholder="Password" className="w-full p-3 border rounded-lg" />
         <input name="specialties" value={data.specialties} onChange={handleChange} placeholder="Specialties (comma separated)" className="w-full p-3 border rounded-lg" />
-        <input name="ambulanceDriver" value={data.ambulanceDriver} onChange={handleChange} placeholder="Ambulance Driver Number" className="w-full p-3 border rounded-lg" />
         <div className="flex gap-2 mt-3">
           <button onClick={handleSubmit} className="flex-1 bg-blue-600 text-white py-2 rounded-lg">Register</button>
           <button onClick={onCancel} className="flex-1 bg-slate-200 py-2 rounded-lg">Cancel</button>
@@ -1125,7 +1258,7 @@ function HospitalLoginForm({ onLogin, onRegister }) {
 
   return (
     <div>
-      <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" className="w-full p-3 border rounded-lg mb-2" />
+      <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Hospital ID" className="w-full p-3 border rounded-lg mb-2" />
       <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" type="password" className="w-full p-3 border rounded-lg mb-2" />
       <div className="flex gap-2">
         <button onClick={handleSubmit} className="flex-1 bg-blue-600 text-white py-2 rounded-lg">Login</button>
@@ -1143,7 +1276,106 @@ function HospitalDashboard() {
   const [alerts, setAlerts] = useState(() => {
     return JSON.parse(localStorage.getItem('inboundAlerts') || '[]');
   });
+  const [patientTrackerColumns, setPatientTrackerColumns] = useState(() => {
+    const stored = localStorage.getItem('patientTrackerColumns');
+    return stored ? JSON.parse(stored) : [{ id: 1, name: 'Patient Name' }, { id: 2, name: 'Status' }];
+  });
+  const [specialties, setSpecialties] = useState(() => {
+    const stored = localStorage.getItem('hospitalSpecialties');
+    return stored ? JSON.parse(stored) : [{ id: 1, specialty: '', doctors: '' }];
+  });
   const [selected, setSelected] = useState(null);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [editData, setEditData] = useState({
+    hospitalId: hospital?.hospitalId || '',
+    hospitalName: hospital?.hospitalName || '',
+    contact: hospital?.contact || '',
+    email: hospital?.email || '',
+    specialties: hospital?.specialties || ''
+  });
+
+  const handleLogout = () => {
+    localStorage.clear();
+    window.location.href = '/';
+  };
+
+  const handleEdit = () => {
+    setIsEditMode(true);
+    setIsMenuOpen(false);
+  };
+
+  const handleUpdate = () => {
+    if (!editData.hospitalId || !editData.hospitalName || !editData.email) {
+      alert('Please fill Hospital ID, Hospital Name and Email');
+      return;
+    }
+    const updatedHospital = { ...hospital, ...editData };
+    localStorage.setItem('hospitalLoggedIn', JSON.stringify(updatedHospital));
+    localStorage.setItem('hospitalData', JSON.stringify(updatedHospital));
+    setHospital(updatedHospital);
+    setIsEditMode(false);
+    alert('Hospital details updated successfully!');
+  };
+
+  const handleEditChange = (e) => {
+    const { name, value } = e.target;
+    // For contact, only allow digits (0-9)
+    if (name === 'contact') {
+      const onlyDigits = value.replace(/\D/g, '');
+      setEditData({ ...editData, [name]: onlyDigits });
+    } else {
+      setEditData({ ...editData, [name]: value });
+    }
+  };
+
+  // Patient Tracker Column Functions
+  const addTrackerColumn = () => {
+    const newColumn = { id: Date.now(), name: `Column ${patientTrackerColumns.length + 1}` };
+    const updated = [...patientTrackerColumns, newColumn];
+    setPatientTrackerColumns(updated);
+    localStorage.setItem('patientTrackerColumns', JSON.stringify(updated));
+  };
+
+  const updateTrackerColumn = (id, newName) => {
+    const updated = patientTrackerColumns.map(col => col.id === id ? { ...col, name: newName } : col);
+    setPatientTrackerColumns(updated);
+    localStorage.setItem('patientTrackerColumns', JSON.stringify(updated));
+  };
+
+  const removeTrackerColumn = (id) => {
+    if (patientTrackerColumns.length === 1) {
+      alert('At least one column is required');
+      return;
+    }
+    const updated = patientTrackerColumns.filter(col => col.id !== id);
+    setPatientTrackerColumns(updated);
+    localStorage.setItem('patientTrackerColumns', JSON.stringify(updated));
+  };
+
+  // Specialties Functions
+  const addSpecialty = () => {
+    const newSpec = { id: Date.now(), specialty: '', doctors: '' };
+    const updated = [...specialties, newSpec];
+    setSpecialties(updated);
+    localStorage.setItem('hospitalSpecialties', JSON.stringify(updated));
+  };
+
+  const updateSpecialty = (id, field, value) => {
+    const updated = specialties.map(spec => spec.id === id ? { ...spec, [field]: value } : spec);
+    setSpecialties(updated);
+    localStorage.setItem('hospitalSpecialties', JSON.stringify(updated));
+  };
+
+  const removeSpecialty = (id) => {
+    if (specialties.length === 1) {
+      alert('At least one specialty is required');
+      return;
+    }
+    const updated = specialties.filter(spec => spec.id !== id);
+    setSpecialties(updated);
+    localStorage.setItem('hospitalSpecialties', JSON.stringify(updated));
+  };
 
   useEffect(() => {
     const iv = setInterval(() => {
@@ -1153,62 +1385,146 @@ function HospitalDashboard() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-white p-6">
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-xl font-black">{hospital?.hospitalName || 'Hospital Dashboard'}</h2>
-        <div className="text-sm text-slate-500">Reception: {hospital?.receptionistName || '-'}</div>
-      </div>
+    <div className="min-h-screen bg-white text-slate-900 relative overflow-hidden">
+      {/* Sliding Menu Overlay */}
+      <AnimatePresence>
+        {isMenuOpen && (
+          <motion.div initial={{ x: '-100%' }} animate={{ x: 0 }} exit={{ x: '-100%' }} className="fixed inset-0 z-50 bg-white w-3/4 shadow-2xl p-6">
+            <div className="flex justify-between mb-10">
+              <span className="font-black text-blue-600 text-xl">Hospital Menu</span>
+              <X onClick={() => setIsMenuOpen(false)} className="cursor-pointer" />
+            </div>
+            <nav className="space-y-6">
+              <div onClick={handleEdit} className="flex items-center gap-4 text-lg font-bold cursor-pointer hover:text-blue-600 transition"><User className="w-6 h-6" /> Edit Details</div>
+              {isEditMode && <div onClick={handleLogout} className="flex items-center gap-4 text-lg font-bold cursor-pointer hover:text-red-600 transition"><LogOut className="w-6 h-6" /> Logout</div>}
+              {!isEditMode && <div onClick={handleLogout} className="flex items-center gap-4 text-lg font-bold cursor-pointer hover:text-red-600 transition"><LogOut className="w-6 h-6" /> Logout</div>}
+            </nav>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-      <div className="grid grid-cols-3 gap-4">
-        <div className="col-span-2 space-y-4">
-          <div className="bg-white p-4 rounded-lg shadow">
-            <h3 className="font-bold mb-2">Specialties</h3>
-            <div className="text-sm text-slate-600">{hospital?.specialties || 'Not set'}</div>
+      {/* Header with Menu Button */}
+      <div className="min-h-screen bg-white p-6 relative">
+        {/* Update Details Button - Corner */}
+        {isEditMode && (
+          <div className="absolute top-6 right-6">
+            <button onClick={handleUpdate} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-blue-700 transition">
+              Update Details
+            </button>
           </div>
+        )}
 
-          <div className="bg-white p-4 rounded-lg shadow">
-            <h3 className="font-bold mb-2">Ambulance Driver</h3>
-            <div className="text-sm text-slate-600">{hospital?.ambulanceDriver || 'Not set'}</div>
-          </div>
+        <div className="flex justify-between items-center mb-6">
+          <button onClick={() => setIsMenuOpen(true)} className="text-2xl"><Menu /></button>
+          <h2 className="text-xl font-black">{hospital?.hospitalName || 'Hospital Dashboard'}</h2>
+          <div className="text-sm text-slate-500">ID: {hospital?.hospitalId || '-'}</div>
+        </div>
 
-          <div className="bg-white p-4 rounded-lg shadow">
-            <h3 className="font-bold mb-2">Inbound Alerts</h3>
-            {alerts.length === 0 && <div className="text-sm text-slate-500">No alerts</div>}
-            <div className="space-y-2">
-              {alerts.map((a, i) => (
-                <div key={i} className="p-3 border rounded-lg cursor-pointer" onClick={() => setSelected(a)}>
-                  <div className="flex justify-between">
-                    <div>
-                      <div className="font-bold">{a.patient}</div>
-                      <div className="text-xs text-slate-500">{a.phone}</div>
-                    </div>
-                    <div className="text-xs text-slate-400">{a.timestamp}</div>
-                  </div>
-                </div>
-              ))}
+        {isEditMode ? (
+          // Edit Form
+          <div className="max-w-2xl bg-white p-6 rounded-lg shadow-lg mb-6">
+            <h3 className="text-2xl font-bold mb-4">Edit Hospital Details</h3>
+            <div className="space-y-4">
+              <input name="hospitalId" value={editData.hospitalId} onChange={handleEditChange} placeholder="Hospital ID" className="w-full p-3 border rounded-lg" />
+              <input name="hospitalName" value={editData.hospitalName} onChange={handleEditChange} placeholder="Hospital Name" className="w-full p-3 border rounded-lg" />
+              <input name="contact" value={editData.contact} onChange={handleEditChange} placeholder="Hospital Contact Number" className="w-full p-3 border rounded-lg" maxLength="10" />
+              <input name="email" value={editData.email} onChange={handleEditChange} placeholder="Hospital Email" className="w-full p-3 border rounded-lg" />
+              <input name="specialties" value={editData.specialties} onChange={handleEditChange} placeholder="Specialties (comma-separated)" className="w-full p-3 border rounded-lg" />
+              <button onClick={() => setIsEditMode(false)} className="w-full bg-slate-300 text-slate-900 py-2 rounded-lg font-bold hover:bg-slate-400 transition">
+                Cancel
+              </button>
             </div>
           </div>
-        </div>
-
-        <div className="space-y-4">
-          <div className="bg-white p-4 rounded-lg shadow h-64">
-            <h3 className="font-bold mb-2">Patient Tracker</h3>
-            {selected ? (
-              <div>
-                <div className="text-sm mb-2">Patient: {selected.patient}</div>
-                <div className="text-sm mb-2">Location: {selected.coords}</div>
-                <a href={selected.mapsLink} target="_blank" rel="noreferrer" className="text-blue-600 underline">Open in Google Maps</a>
+        ) : (
+          // Dashboard View
+          <div className="space-y-6">
+            {/* Hospital Details */}
+            <div className="bg-white p-6 rounded-lg shadow-lg">
+              <h3 className="text-2xl font-bold mb-4">Hospital Details</h3>
+              <div className="text-slate-600 space-y-3">
+                <div><span className="font-semibold">Name:</span> {hospital?.hospitalName || 'Not set'}</div>
+                <div><span className="font-semibold">ID:</span> {hospital?.hospitalId || 'Not set'}</div>
+                <div><span className="font-semibold">Contact:</span> {hospital?.contact || 'Not set'}</div>
+                <div><span className="font-semibold">Email:</span> {hospital?.email || 'Not set'}</div>
               </div>
-            ) : (
-              <div className="text-sm text-slate-500">Select an alert to track patient</div>
-            )}
-          </div>
+            </div>
 
-          <div className="bg-white p-4 rounded-lg shadow">
-            <h3 className="font-bold mb-2">Settings</h3>
-            <div className="text-sm text-slate-500">Manage hospital profile in menu (Edit Profile)</div>
+            {/* Patient Tracker Columns */}
+            <div className="bg-white p-6 rounded-lg shadow-lg">
+              <h3 className="text-2xl font-bold mb-4">Patient Tracker Columns</h3>
+              <div className="space-y-3">
+                {patientTrackerColumns.map((col) => (
+                  <div key={col.id} className="flex items-center gap-3 p-3 border border-slate-200 rounded-lg bg-slate-50">
+                    <input
+                      type="text"
+                      value={col.name}
+                      onChange={(e) => updateTrackerColumn(col.id, e.target.value)}
+                      placeholder="Column name"
+                      className="flex-1 p-2 border border-slate-300 rounded-lg"
+                    />
+                    <button
+                      onClick={() => removeTrackerColumn(col.id)}
+                      className="px-3 py-2 bg-red-600 text-white rounded-lg font-bold hover:bg-red-700 transition"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+                <button
+                  onClick={addTrackerColumn}
+                  className="w-full p-3 border-2 border-dashed border-blue-600 text-blue-600 rounded-lg font-bold hover:bg-blue-50 transition"
+                >
+                  + Add Column
+                </button>
+              </div>
+            </div>
+
+            {/* Specialties with Doctors */}
+            <div className="bg-white p-6 rounded-lg shadow-lg">
+              <h3 className="text-2xl font-bold mb-4">Specialties & Doctors</h3>
+              <div className="space-y-3">
+                {specialties.map((spec) => (
+                  <div key={spec.id} className="p-4 border border-slate-200 rounded-lg bg-slate-50">
+                    <div className="grid grid-cols-2 gap-3 mb-3">
+                      <div>
+                        <label className="text-xs font-bold text-slate-600 uppercase mb-1 block">Specialty</label>
+                        <input
+                          type="text"
+                          value={spec.specialty}
+                          onChange={(e) => updateSpecialty(spec.id, 'specialty', e.target.value)}
+                          placeholder="e.g., Cardiology"
+                          className="w-full p-2 border border-slate-300 rounded-lg"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold text-slate-600 uppercase mb-1 block">Corresponding Doctors</label>
+                        <input
+                          type="text"
+                          value={spec.doctors}
+                          onChange={(e) => updateSpecialty(spec.id, 'doctors', e.target.value)}
+                          placeholder="e.g., Dr. Smith, Dr. Jones"
+                          className="w-full p-2 border border-slate-300 rounded-lg"
+                        />
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => removeSpecialty(spec.id)}
+                      className="w-full px-3 py-2 bg-red-600 text-white rounded-lg font-bold hover:bg-red-700 transition"
+                    >
+                      Remove Specialty
+                    </button>
+                  </div>
+                ))}
+                <button
+                  onClick={addSpecialty}
+                  className="w-full p-3 border-2 border-dashed border-green-600 text-green-600 rounded-lg font-bold hover:bg-green-50 transition"
+                >
+                  • Add Specialty
+                </button>
+              </div>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
